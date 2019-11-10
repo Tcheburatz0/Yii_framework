@@ -1,0 +1,116 @@
+Выполнение действий по расписанию
+==================================
+
+Есть два cпособа запустить код по расписанию:
+
+ - Эмулировать браузер.
+ - Использовать консольное приложение.
+ 
+Настройка расписания в обоих случаях одинакова и отличается лишь выполняемой командой.
+В Linux и MacOS чаще всего используется [cron](http://ru.wikipedia.org/wiki/Cron),
+в Windows — [SchTasks или at](http://technet.microsoft.com/en-us/library/cc725744.aspx).
+ 
+Эмуляция браузера
+-----------------
+
+Используем существующий метод контроллера. В этом случае выполняется одна из следующих команд
+в зависимости от версии и типа ОС:
+
+```
+GET http://example.com/cron/
+```
+
+```
+wget -O - http://example.com/cron/
+```
+
+```
+lynx --dump http://example.com/cron/ >/dev/null
+```
+
+Данный способ имеет большой минус: если по крону выполняются достаточно
+затратные действия, кто угодно при знании URL сможет сильно нагрузить сервер.
+
+Конечно, можно проверить какой-нибудь параметр непосредственно в действии контроллера:
+```php
+if($_GET['key']!='my_secret_key') die();
+```
+
+Это несколько усложнит задачу злоумышленнику, но полностью проблемы не решит.
+
+Использование консольного приложения
+------------------------------------
+
+Самый правильный, и не менее лёгкий в реализации вариант — написать команду
+для [консольного приложения](/doc/guide/ru/topics.console).
+
+Создаём команду в `/protected/commands/TestCommand.php`:
+```php
+class TestCommand extends CConsoleCommand {
+    public function run($args) {
+        // тут делаем то, что нам нужно
+    }
+}
+```
+
+Создаем файл `protected/cron.php` и указываем в нем пути к файлу `yiic.php` из директории фреймворка и 
+к отдельному файлу конфигурации. Выглядеть `cron.php` будет примерно так:
+
+```php
+$yiic=dirname(__FILE__).'/../framework/yiic.php';
+$config=dirname(__FILE__).'/config/cron.php';
+
+require_once($yiic);
+```
+
+Копируем файл конфигурации `protected/config/console.php` в `protected/config/cron.php` и правим под наши нужды:
+```php
+return array(
+    // У вас этот путь может отличаться. Можно подсмотреть в config/main.php.
+    'basePath'=>dirname(__FILE__).DIRECTORY_SEPARATOR.'..',
+    'name'=>'Cron',
+
+    'preload'=>array('log'),
+    
+    'import'=>array(
+		'application.components.*',
+		'application.models.*',
+    ),
+	// Копирование yiic.php и console.php было сделано ради
+    // перенаправления журнала для cron в отдельные файлы:
+    'components'=>array(
+		'log'=>array(
+			'class'=>'CLogRouter',
+			'routes'=>array(
+				array(
+					'class'=>'CFileLogRoute',
+                    'logFile'=>'cron.log',
+					'levels'=>'error, warning',
+				),
+				array(
+					'class'=>'CFileLogRoute',
+					'logFile'=>'cron_trace.log',
+					'levels'=>'trace',
+				),
+			),
+		),
+
+        // Соединение с СУБД
+		'db'=>array(
+			'class'=>'CDbConnection',
+			// …
+		),
+    ),
+);
+```
+
+
+На выполнение ставим:
+```
+php /path/to/cron.php test
+```
+Где `test` — имя нашей команды.
+
+---
+  - `Автор`: Александр Макаров, Sam Dark ([rmcreative.ru](http://rmcreative.ru/))
+  - `Обсуждение и комментарии`: [http://yiiframework.ru/forum/viewtopic.php?f=8&t=143](http://yiiframework.ru/forum/viewtopic.php?f=8&t=143)

@@ -1,0 +1,305 @@
+Как загрузить файл используя модель (вариант с тонким контроллером и толстой моделью)
+=====================================================================================
+
+Хорошей практикой считается создание тонких контроллеров и толстых моделей
+всегда, когда это возможно. Это позволяет сделать код приложения более пригодным
+для повторного использования.
+
+Данный рецепт повторяет то, что уже было описано в рецепте
+«[Как загрузить файл используя модель](form.file.upload)»
+с той лишь разницей, что теперь мы не будем писать код, связанный с работой с файлами,
+в контроллере, а вынесем его в модель.
+
+Кроме того, в рецепте будут показаны модель и контроллер для того случая,
+когда нам может пригодится функционал не только добавления объекта модели с файлом
+(`C` в `CRUD`), но и обновления файла при редактировании уже существующего объекта модели
+(`U` в `CRUD`), который был создан ранее и хранится в базе данных.
+
+Контроллер
+==========
+
+Контроллер стандартный, почти такой же, какой генерируется при помощи
+[Gii](http://yiiframework.ru/doc/guide/ru/topics.gii). В данном случае контроллер
+не выполняет действий, связанных с загружаемыми файлами напрямую. Всё, чем он
+занимается — это обработка HTTP запросов, передача данных модели
+и отображение представления.
+
+```php
+class ItemController extends Controller{
+    public function actionUpdate($id=null){
+        // в зависимости от аргумента создаем модель или ищем уже существующую
+        if($id===null)
+            $model=new Item();
+        else if(!$model=Item::model()->findByPk($id))
+            throw new CHttpException(404);
+
+        if(isset($_POST['Item'])){
+            $model->attributes=$_POST['Item'];
+            if($model->save()){
+                // отображаем успешное сообщение, обновляем страницу
+                // или перенаправляем куда-либо ещё
+                $this->refresh();
+            }
+        }
+
+        $this->render('update',array('model'=>$model));
+    }
+}
+```
+
+Представление
+=============
+
+Форму в представлении можно создать при помощи класса [CHtml], но так как это уже было показано в рецепте
+«[Как загрузить файл используя модель](http://yiiframework.ru/doc/cookbook/ru/form.file.upload)», то мы
+сделаем это через [CActiveForm].
+
+```php
+<?php
+/* @var $this ItemController */
+/* @var $model Item */
+/* @var $form CActiveForm */
+?>
+
+<?php $form=$this->beginWidget('CActiveForm',array(
+    'htmlOptions'=>array('enctype'=>'multipart/form-data'),
+)); ?>
+    <?php /* текстовое поле названия элемента */ ?>
+    <div class="field">
+        <?php echo $form->labelEx($model,'title'); ?>
+        <?php echo $form->textField($model,'title'); ?>
+        <?php echo $form->error($model,'title'); ?>
+    </div>
+
+    <?php /* поле для загрузки файла */ ?>
+    <div class="field">
+        <?php if($model->document): ?>
+            <p><?php echo CHtml::encode($model->document); ?></p>
+        <?php endif; ?>
+        <?php echo $form->labelEx($model,'document'); ?>
+        <?php echo $form->fileField($model,'document'); ?>
+        <?php echo $form->error($model,'document'); ?>
+    </div>
+
+    <?php /* кнопка отправки */ ?>
+    <div class="button">
+        <?php echo CHtml::submitButton($model->isNewRecord ? 'Создать' : 'Сохранить'); ?>
+    </div>
+<?php $this->endWidget(); ?>
+```
+
+Структура формы стандартная. Отображаем две подписи (`<label />`), одно текстовое поле,
+одно файловое поле, название файла (если он был загружен ранее) и кнопку отправки формы.
+Не забываем указать атрибут `enctype` со значением `multipart/form-data` в открывающем теге формы.
+
+Модель
+======
+
+Основная часть рецепта — это модель, в которой находится код, отвечающий за работу с файлом:
+валидация, обработка файла и его сохранение происходит в ней.
+
+Переопределяем метод [CActiveRecord::beforeSave], выполняемый перед сохранением AR-модели.
+В нём получаем экземпляр класса загруженного файла и сохраняем его в нужное место на диске.
+
+Под обновлением понимается редактирование модели, то есть тогда, когда
+`CActiveRecord::getIsNewRecord()` возвращает `false` и активным сценарием валидации
+по умолчанию является `update`.
+
+```php
+/**
+ * @property integer $id
+ * @property string $title
+ * @property string $document
+ */
+class Item extends CActiveRecord{
+    public $document;
+
+    public static function model($className=__CLASS__){
+        return parent::model($className);
+    }
+
+    public function tableName(){
+        return '{{item}}';
+    }
+
+    public function rules(){
+        return array(
+            array('title','required','on'=>'insert,update'),
+            array('document','file','types'=>'doc,docx,xls,xlsx,odt,pdf',
+                'allowEmpty'=>true,'on'=>'insert,update'),
+        );
+    }
+
+    protected function beforeSave(){
+        if(!parent::beforeSave())
+            return false;
+        if(($this->scenario=='insert' || $this->scenario=='update') &&
+            ($document=CUploadedFile::getInstance($this,'document'))){
+            $this->deleteDocument(); // старый документ удалим, потому что загружаем новый
+
+            $this->document=$document;
+            $this->document->saveAs(
+                Yii::getPathOfAlias('webroot.media').DIRECTORY_SEPARATOR.$this->document);
+        }
+        return true;
+    }
+
+    protected function beforeDelete(){
+        if(!parent::beforeDelete())
+            return false;
+        $this->deleteDocument(); // удалили модель? удаляем и файл
+        return true;
+    }
+
+    public function deleteDocument(){
+        $documentPath=Yii::getPathOfAlias('webroot.media').DIRECTORY_SEPARATOR.
+            $this->document;
+        if(is_file($documentPath))
+            unlink($documentPath);
+    }
+}
+```
+
+`DDL` таблицы для приведённой выше AR-модели:
+
+```sql
+DROP TABLE IF EXISTS `tbl_item`;
+CREATE TABLE `tbl_item` (
+    `id` int(11) NOT NULL AUTO_INCREMENT,
+    `title` varchar(250) NOT NULL DEFAULT '',
+    `document` varchar(250) NOT NULL DEFAULT '',
+    PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+```
+
+Поведение
+=========
+
+Код для работы с файлом при необходимости можно вынести в поведение ([CActiveRecordBehavior]).
+Ниже представлен рабочий пример такого поведения:
+
+```php
+/**
+ * @property string $savePath путь к директории, в которой сохраняем файлы
+ */
+class UploadableFileBehavior extends CActiveRecordBehavior{
+    /**
+     * @var string название атрибута, хранящего в себе имя файла и файл
+     */
+    public $attributeName='document';
+    /**
+     * @var string алиас директории, куда будем сохранять файлы
+     */
+    public $savePathAlias='webroot.media';
+    /**
+     * @var array сценарии валидации к которым будут добавлены правила валидации
+     * загрузки файлов
+     */
+    public $scenarios=array('insert','update');
+    /**
+     * @var string типы файлов, которые можно загружать (нужно для валидации)
+     */
+    public $fileTypes='doc,docx,xls,xlsx,odt,pdf';
+
+    /**
+     * Шорткат для Yii::getPathOfAlias($this->savePathAlias).DIRECTORY_SEPARATOR.
+     * Возвращает путь к директории, в которой будут сохраняться файлы.
+     * @return string путь к директории, в которой сохраняем файлы
+     */
+    public function getSavePath(){
+        return Yii::getPathOfAlias($this->savePathAlias).DIRECTORY_SEPARATOR;
+    }
+
+    public function attach($owner){
+        parent::attach($owner);
+
+        if(in_array($owner->scenario,$this->scenarios)){
+            // добавляем валидатор файла
+            $fileValidator=CValidator::createValidator('file',$owner,$this->attributeName,
+                array('types'=>$this->fileTypes,'allowEmpty'=>true));
+            $owner->validatorList->add($fileValidator);
+        }
+    }
+
+    // имейте ввиду, что методы-обработчики событий в поведениях должны иметь
+    // public-доступ начиная с 1.1.13RC
+    public function beforeSave($event){
+        if(in_array($this->owner->scenario,$this->scenarios) &&
+            ($file=CUploadedFile::getInstance($this->owner,$this->attributeName))){
+            $this->deleteFile(); // старый файл удалим, потому что загружаем новый
+
+            $this->owner->setAttribute($this->attributeName,$file->name);
+            $file->saveAs($this->savePath.$file->name);
+        }
+        return true;
+    }
+
+    // имейте ввиду, что методы-обработчики событий в поведениях должны иметь
+    // public-доступ начиная с 1.1.13RC
+    public function beforeDelete($event){
+        $this->deleteFile(); // удалили модель? удаляем и файл, связанный с ней
+    }
+
+    public function deleteFile(){
+        $filePath=$this->savePath.$this->owner->getAttribute($this->attributeName);
+        if(@is_file($filePath))
+            @unlink($filePath);
+    }
+}
+```
+
+В поведении мы делаем тоже самое, что и в модели ранее. Код для работы с файлом мы просто вынесли
+из модели в поведение, тем самым увеличили повторную используемость кода.
+
+Код модели теперь совсем простой:
+
+```php
+/**
+ * @property integer $id
+ * @property string $title
+ * @property string $document
+ */
+class Item extends CActiveRecord{
+    public static function model($className=__CLASS__){
+        return parent::model($className);
+    }
+
+    public function tableName(){
+        return '{{item}}';
+    }
+
+    public function rules(){
+        return array(
+            array('title','required','on'=>'insert,update'),
+            // после генерации модели при помощи Gii нужно убрать валидацию
+            // у атрибута $document — если этого не сделать, то оно будет
+            // препятствовать правильной работе валидации загружаемого файла
+        );
+    }
+
+    public function behaviors(){
+        return array(
+            // наше поведение для работы с файлом
+            'uploadableFile'=>array(
+                'class'=>'application.components.UploadableFileBehavior',
+                // конфигурируем нужные свойства класса UploadableFileBehavior
+                // ...
+            ),
+        );
+    }
+}
+```
+
+Заключение
+==========
+
+Стоит иметь ввиду, что данный рецепт является всего лишь примером. Так, например, мы не учли
+ситуацию, когда две разные модели могут иметь два файла с одним и тем-же именем.
+
+---
+  - `Автор`: [resurtm](http://resurtm.com/)
+  - `Дополнения`: [mc-bear](http://yiiframework.ru/forum/memberlist.php?mode=viewprofile&u=58)
+  - `Оригинальный рецепт`: [как загрузить файл используя модель](form.file.upload)
+  - `Английский рецепт`: [how to upload a file using a model](http://www.yiiframework.com/wiki/2/)
+  - [File upload and update / error actions](http://www.yiiframework.com/wiki/2/#c3137)
+  - `Обсуждение и комментарии`: [тема на форуме](http://yiiframework.ru/forum/viewtopic.php?f=8&t=7387)
